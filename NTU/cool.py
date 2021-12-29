@@ -321,11 +321,8 @@ class Cool(Session):
                     return
 
         with ThreadPoolExecutor() as executor:
-            [
-                executor.submit(
-                    self._download, course_name, item
-                ) for item in selected_items
-            ]
+            for item in selected_items:
+                executor.submit(self._download, course_name, item)
 
     def _download(self, course_name, item: Content):
         path = FOOL/self.semester/course_name
