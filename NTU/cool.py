@@ -12,7 +12,7 @@ from NTU.config import FOOL, password, student_id
 json_dump = lambda dictionary, file: json.dump(
     dictionary, file, indent=4, ensure_ascii=False
 )
-Content = namedtuple('Content', 'category, title, url')
+Item = namedtuple('Item', 'category, title, url')
 
 JSON = Path(__file__).parent.parent/'json'
 SRC = Path(__file__).parent.parent/'src'
@@ -201,91 +201,83 @@ class Cool(Session):
         course_name = self.search_course(course_name)
         href = self.courses[self.semester][course_name]
 
+        print(f'Scraping modules of {course_name}...', end=' ')
         soup = BeautifulSoup(
             self.get(f'{self.DOMAIN}{href}/modules').text,
             'lxml'
         )
         context_module = soup('div', id=re.compile(r'context_module_\d+'))
 
+        switch = {
+            'External Url': self._external_url,
+            'Attachment': self._attachment,
+            'Context Module Sub Header': self._sub_header,
+        }
         modules = {}
         for block in context_module:
             name = block.find('h2').text # context_module title
             for tag in block(
                 'div', {'class': ['ig-row', 'ig-published', 'student-view']}
             ):
-                category = tag.find('span', class_='type_icon')['title']
+                category = tag.find('span', class_='type_icon')['title']                
+                
+                item = switch.get(
+                    category, self._others
+                )(category, tag)._asdict()
 
-                switch = {
-                    'External Url': self._external_url(tag),
-                    'Attachment': self._attachment(tag),
-                    'Context Module Sub Header': self._sub_header(tag),
-                }
-                content = switch.get(category, self._others(tag))()._asdict()
-                modules.setdefault(name, []).append(content)
+                modules.setdefault(name, []).append(item)
+
         self.save_modules(modules, course_name, skip_check=True)
+        print('Done')
 
         return modules
 
-    def _external_url(self, tag: BeautifulSoup):
-        def wrapper():
-            category = 'External Url'
-
-            try:
-                info = tag.find('a', self.MODULE_ITEM)
-                title = info['title'].strip()
-                url = info['href']
-
-                if 'http' in url:
-                    pass
-                else:
-                    r = self.get(f'{self.DOMAIN}{url}')
-                    url = BeautifulSoup(r.text, 'lxml').select_one(
-                        '#content > ul > li.active > span > a'
-                    )['href']
-
-                return Content(category, title, url)
-
-            except TypeError as e:
-                print(f'{str(e)}')
-                info = tag.find('a', class_='external')
-                title = info['title'].strip()
-                url = info['href']
-
-                return Content(category, title, url)
-
-        return wrapper
-
-    def _attachment(self, tag: BeautifulSoup):
-        def wrapper():
+    def _external_url(self, category, tag: BeautifulSoup):
+        try:
             info = tag.find('a', self.MODULE_ITEM)
-            category = 'Attachment'
             title = info['title'].strip()
             url = info['href']
 
-            download_link = BeautifulSoup(
-                self.get(f'{self.DOMAIN}{url}').text, 'lxml'
-            ).find('a', download='true')['href']
+            if 'http' in url:
+                pass
+            else:
+                r = self.get(f'{self.DOMAIN}{url}')
+                url = BeautifulSoup(r.text, 'lxml').select_one(
+                    '#content > ul > li.active > span > a'
+                )['href']
 
-            return Content(category, title, download_link)
-        return wrapper
+            return Item(category, title, url)
+
+        except TypeError as e:
+            print(f'{str(e)}')
+            info = tag.find('a', class_='external')
+            title = info['title'].strip()
+            url = info['href']
+
+            return Item(category, title, url)
+
+    def _attachment(self, category, tag: BeautifulSoup):
+        info = tag.find('a', self.MODULE_ITEM)
+        title = info['title'].strip()
+        url = info['href']
+
+        download_link = BeautifulSoup(
+            self.get(f'{self.DOMAIN}{url}').text, 'lxml'
+        ).find('a', download='true')['href']
+
+        return Item(category, title, download_link)
     
-    def _sub_header(self, tag: BeautifulSoup):
-        def wrapper():
-            category = 'Context Module Sub Header'
-            title = tag.find(
-                'span', class_=['title', 'locked_title']
-            )['title'].strip()
-            return Content(category, title, None)
-        return wrapper
+    def _sub_header(self, category, tag: BeautifulSoup):
+        title = tag.find(
+            'span', class_=['title', 'locked_title']
+        )['title'].strip()
+        return Item(category, title, None)
 
-    def _others(self, tag: BeautifulSoup):
-        def wrapper():
-            info = tag.find('a', self.MODULE_ITEM)
-            category = tag.find('span', class_='type_icon')['title']
-            title = info['title'].strip()
-            url = info['href']
-            return Content(category, title, url)
-        return wrapper
+    def _others(self, category, tag: BeautifulSoup):
+        info = tag.find('a', self.MODULE_ITEM)
+        title = info['title'].strip()
+        url = info['href']
+        return Item(category, title, url)
 
     def download(self, course_name: str):
         course_name = self.search_course(course_name)
@@ -324,7 +316,7 @@ class Cool(Session):
             for item in selected_items:
                 executor.submit(self._download, course_name, item)
 
-    def _download(self, course_name, item: Content):
+    def _download(self, course_name, item: Item):
         path = FOOL/self.semester/course_name
         if path.exists():
             pass
@@ -385,7 +377,7 @@ class Fool:
 
     def nav_update(self):
         c = self.c      
-        soup = BeautifulSoup('<ul></ul>', 'html.parser')
+        soup = BeautifulSoup('<ul class="h_navbar"></ul>', 'html.parser')
 
         # TODO: add index.html        
         #li_tags = [f'<li><a href="index.html">Home</a></li>']
@@ -409,7 +401,6 @@ class Fool:
         li_str = '\n'.join(li_tags)
         soup.ul.append(BeautifulSoup(li_str, 'html.parser'))
         (SRC/f'{self.semester}_navbar.html').write_text(soup.prettify())
-        #NAVBAR.write_text(soup.prettify())
 
     def build(self):
         c = self.c
@@ -459,10 +450,10 @@ class Fool:
                 tags.append('\n'.join(li_tags))
 
             (FOOL/self.semester/f'{course_name}.html').write_text(
-                self.template(''.join(tags))
+                self.template(course_name, ''.join(tags))
             )
     
-    def template(self, string):
+    def template(self, course_name, string):
         soup = BeautifulSoup(
             '<html><body><div class="main"></div></body></html>',
             'html.parser'
@@ -472,12 +463,11 @@ class Fool:
         soup.html.insert(0, head)
         NAVBAR = SRC/f'{self.semester}_navbar.html'
         nav = BeautifulSoup(NAVBAR.read_text(), 'html.parser')
+        # TODO: course html directory may change in future
+        active = nav.find('a', href=f'{course_name}.html')
+        active['class'] = 'active' 
         soup.body.insert(0, nav)
         soup.div.append(BeautifulSoup(string, 'html.parser'))
-        '''
-        main = soup('div')[1]
-        main.append(BeautifulSoup(string, 'html.parser'))
-        '''
 
         return soup.prettify()
 
