@@ -1,25 +1,38 @@
 import json
 import re
 from collections import namedtuple
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
 from bs4 import BeautifulSoup, Doctype
 from requests import Session
 
-from NTU.config import FOOL, password, student_id
+from NTU.config import initialize
 
 json_dump = lambda dictionary, file: json.dump(
     dictionary, file, indent=4, ensure_ascii=False
 )
 Item = namedtuple('Item', 'category, title, url')
 
-JSON = Path(__file__).parent.parent/'json'
-SRC = Path(__file__).parent.parent/'src'
+JSON = Path(__file__).parents[1]/'json'
+SRC = Path(__file__).parents[1]/'src'
 HEAD = SRC/'head.html'
 NAVBAR = SRC/'navbar.html'
 LOAD_NAV = SRC/'load_nav.html'
 
+try:
+    with open(JSON/'config.json', 'r', encoding='utf8') as f:
+        d = json.load(f)
+        student_id = d['student_id']
+        password = d['password']
+        FOOL = Path(d['file_directory'])
+except:
+    initialize()
+    with open(JSON/'config.json', 'r', encoding='utf8') as f:
+        d = json.load(f)
+        student_id = d['student_id']
+        password = d['password']
+        FOOL = Path(d['file_directory'])
 
 class Cool(Session):
     DOMAIN = 'https://cool.ntu.edu.tw'
@@ -32,6 +45,7 @@ class Cool(Session):
         self.login(student_id, password)
         self.courses = self.read_courses()
         self.semester = self.check_semester(semester)
+        self.checkpoints = self.read_checkpoints()
 
     def login(self, student_id, password):
         headers = {
@@ -99,7 +113,7 @@ class Cool(Session):
             return self.search(self.semesters, semester)
         else:
             return self.semesters[-1] # this semester
-        
+
     def search(self, target: list, search: str, _match=None) -> str:
         if _match:
             _match = [name for name in _match if search in name]
@@ -123,21 +137,21 @@ class Cool(Session):
     def read_courses(self) -> dict:
         """
         Reading `/json/courses.json` and return it as a dictonary.
-        
+
         If raising `FileNotFoundError`, write `/json/courses.json`.
-        
+
         return: `dict`
         """
         try:
-            with open(JSON/'courses.json', 'r') as f:
+            with open(JSON/'courses.json', 'r', encoding='utf8') as f:
                 return json.load(f)
         except FileNotFoundError:
             return self.get_courses()
-    
+
     def get_courses(self):
         """
         Getting semesters and courses from https://cool.ntu.edu.tw/courses.
-        
+
         And writting to `json/courses.json`.
 
         return: `dict`
@@ -145,7 +159,7 @@ class Cool(Session):
         r = self.get(f'{self.DOMAIN}/courses')
         soup = BeautifulSoup(r.text, 'lxml')
         course_rows = soup('tr', class_='course-list-table-row')
-        
+
         _courses = {} # naming _courses to distinguish from self.courses
         for course_row in course_rows:
             try:
@@ -161,7 +175,7 @@ class Cool(Session):
         ordered_keys = sorted(list(_courses.keys()))
         _courses = {key: _courses[key] for key in ordered_keys}
 
-        with open(JSON/'courses.json', 'w') as f:
+        with open(JSON/'courses.json', 'w', encoding='utf8') as f:
             json_dump(_courses, f)
  
         return _courses
@@ -171,17 +185,26 @@ class Cool(Session):
             pass
         else:
             course_name = self.search_course(course_name)
-        _modules = {course_name: modules}
-        
+
         try:
-            with open(JSON/f'{self.semester}.json', 'r') as f:
+            with open(JSON/f'{self.semester}.json', 'r', encoding='utf8') as f:
                 saved = json.load(f)
-                saved.update(_modules)
-            with open(JSON/f'{self.semester}.json', 'w') as f:
-                json_dump(saved, f)
         except:
-            with open(JSON/f'{self.semester}.json', 'w') as f:
-                json_dump(_modules, f)
+            with open(JSON/f'{self.semester}.json', 'w', encoding='utf8') as f:
+                saved = {}
+                json_dump(saved, f)
+
+        saved.setdefault(course_name, {}).update(modules)
+        '''
+        try:
+            saved[course_name].update(modules)
+        except KeyError:
+            saved[course_name] = {}
+            saved[course_name].update(modules)
+        '''
+
+        with open(JSON/f'{self.semester}.json', 'w', encoding='utf8') as f:
+            json_dump(saved, f)
 
     def read_modules(self, course_name: str) -> dict:
         """
@@ -191,15 +214,16 @@ class Cool(Session):
         course_name = self.search_course(course_name)
 
         try:
-            with open(JSON/f'{self.semester}.json', 'r') as f:
+            with open(JSON/f'{self.semester}.json', 'r', encoding='utf8') as f:
                 return json.load(f)[course_name]
         except FileNotFoundError:
-            with open(JSON/f'{self.semester}.json', 'w') as f:
+            with open(JSON/f'{self.semester}.json', 'w', encoding='utf8') as f:
                 return self.get_modules()
 
     def get_modules(self, course_name: str):
         course_name = self.search_course(course_name)
         href = self.courses[self.semester][course_name]
+        checkpoint = self.checkpoints[self.semester][course_name]
 
         print(f'Scraping modules of {course_name}...', end=' ')
         soup = BeautifulSoup(
@@ -214,13 +238,13 @@ class Cool(Session):
             'Context Module Sub Header': self._sub_header,
         }
         modules = {}
-        for block in context_module:
+        for block in context_module[checkpoint:]:
             name = block.find('h2').text # context_module title
             for tag in block(
                 'div', {'class': ['ig-row', 'ig-published', 'student-view']}
             ):
                 category = tag.find('span', class_='type_icon')['title']                
-                
+
                 item = switch.get(
                     category, self._others
                 )(category, tag)._asdict()
@@ -228,9 +252,29 @@ class Cool(Session):
                 modules.setdefault(name, []).append(item)
 
         self.save_modules(modules, course_name, skip_check=True)
+        self.checkpoints[self.semester][course_name] = len(context_module) - 1
+        self.save_checkpoints()
         print('Done')
 
         return modules
+
+    def read_checkpoints(self):
+        try:
+            with open(JSON/'checkpoints.json', 'r', encoding='utf8') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            checkpoints = {}
+            for semester, courses in self.courses.items():
+                checkpoints[semester] = {}
+                for course in courses.keys():
+                    checkpoints[semester][course] = 0
+            self.checkpoints = checkpoints
+            self.save_checkpoints()
+            return checkpoints
+
+    def save_checkpoints(self):
+        with open(JSON/'checkpoints.json', 'w', encoding='utf8') as f:
+            json_dump(self.checkpoints, f)
 
     def _external_url(self, category, tag: BeautifulSoup):
         try:
@@ -313,8 +357,11 @@ class Cool(Session):
                     return
 
         with ThreadPoolExecutor() as executor:
-            for item in selected_items:
+            fs = [
                 executor.submit(self._download, course_name, item)
+                for item in selected_items
+            ]
+            wait(fs, return_when='FIRST_COMPLETED')
 
     def _download(self, course_name, item: Item):
         path = FOOL/self.semester/course_name
@@ -347,7 +394,10 @@ class Fool:
     def __init__(self, cool: Cool, semester=None):
         self.c = cool
         self.nav_lang = 1 # 1 for Chinese, 2 for English
-        self.semester = cool.check_semester(semester)
+
+    @property
+    def semester(self):
+        return self.c.semester
 
     def set_nav_lang(self, lang):
         alias = {
@@ -373,7 +423,7 @@ class Fool:
         argument:
         - semester: `str`
         """
-        self.semester = self.c.check_semester(semester)
+        self.c.semester = self.c.check_semester(semester)
 
     def nav_update(self):
         c = self.c      
@@ -385,7 +435,10 @@ class Fool:
         for course_name in c.courses[self.semester].keys():
             try:
                 string = re.search(
-                    r'([A-z\u4e00-\u9fff]+) ([A-z1-9 \-\(\)\u2160-\u217f]+)',
+                    (
+                        r'([A-z\u4e00-\u9fff\uff1a\uff08\uff09]+) '
+                        r'([A-z1-9 \-\(\)\u2160-\u217f]+)'
+                    ),
                     course_name
                 ).group(self.nav_lang)
             except AttributeError:
@@ -400,11 +453,14 @@ class Fool:
 
         li_str = '\n'.join(li_tags)
         soup.ul.append(BeautifulSoup(li_str, 'html.parser'))
-        (SRC/f'{self.semester}_navbar.html').write_text(soup.prettify())
+
+        (SRC/f'{self.semester}_navbar.html').write_text(
+            soup.prettify(), encoding='utf8'
+        )
 
     def build(self):
         c = self.c
-        with open(JSON/f'{self.semester}.json', 'r') as f:
+        with open(JSON/f'{self.semester}.json', 'r', encoding='utf8') as f:
             courses = json.load(f)
 
         for course_name, modules in courses.items():
@@ -449,8 +505,13 @@ class Fool:
 
                 tags.append('\n'.join(li_tags))
 
+            if (FOOL/self.semester).exists():
+                pass
+            else:
+                (FOOL/self.semester).mkdir(parents=True, exist_ok=True)
+                
             (FOOL/self.semester/f'{course_name}.html').write_text(
-                self.template(course_name, ''.join(tags))
+                self.template(course_name, ''.join(tags)), encoding='utf8'
             )
     
     def template(self, course_name, string):
@@ -459,10 +520,10 @@ class Fool:
             'html.parser'
         )
         soup.insert(0, Doctype('html'))
-        head = BeautifulSoup(HEAD.read_text(), 'html.parser')
+        head = BeautifulSoup(HEAD.read_text(encoding='utf8'), 'html.parser')
         soup.html.insert(0, head)
         NAVBAR = SRC/f'{self.semester}_navbar.html'
-        nav = BeautifulSoup(NAVBAR.read_text(), 'html.parser')
+        nav = BeautifulSoup(NAVBAR.read_text(encoding='utf8'), 'html.parser')
         # TODO: course html directory may change in future
         active = nav.find('a', href=f'{course_name}.html')
         active['class'] = 'active' 
@@ -470,10 +531,3 @@ class Fool:
         soup.div.append(BeautifulSoup(string, 'html.parser'))
 
         return soup.prettify()
-
-
-if __name__ == '__main__':
-    with Cool() as c:
-        f = Fool(c)
-        #ul = f.nav_update()
-        pass
