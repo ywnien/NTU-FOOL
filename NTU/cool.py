@@ -17,8 +17,6 @@ Item = namedtuple('Item', 'category, title, url')
 JSON = Path(__file__).parents[1]/'json'
 SRC = Path(__file__).parents[1]/'src'
 HEAD = SRC/'head.html'
-NAVBAR = SRC/'navbar.html'
-LOAD_NAV = SRC/'load_nav.html'
 
 try:
     with open(JSON/'config.json', 'r', encoding='utf8') as f:
@@ -130,10 +128,10 @@ class Cool(Session):
             print(*_match, sep=' | ')
             search = input('\nSearch: ')
             return self.search(target, search, _match)
-        
+
     def search_course(self, search: str) -> str:
         return self.search(self.courses[self.semester].keys(), search)
-    
+
     def read_courses(self) -> dict:
         """
         Reading `/json/courses.json` and return it as a dictonary.
@@ -195,13 +193,6 @@ class Cool(Session):
                 json_dump(saved, f)
 
         saved.setdefault(course_name, {}).update(modules)
-        '''
-        try:
-            saved[course_name].update(modules)
-        except KeyError:
-            saved[course_name] = {}
-            saved[course_name].update(modules)
-        '''
 
         with open(JSON/f'{self.semester}.json', 'w', encoding='utf8') as f:
             json_dump(saved, f)
@@ -465,10 +456,10 @@ class Fool:
 
         for course_name, modules in courses.items():
             tags = [f'<h1>{course_name}</h1>']
-            
+
             for module_title, items in modules.items():
                 tags.append(f'<h2>{module_title}</h2>')
-                
+
                 li_tags = ['<ul>']
                 for item in items:
                     category = item['category']
@@ -500,7 +491,7 @@ class Fool:
                                 f'{self.emoji[category]} {item["title"]}'
                                 '</a></li>'
                             )
-                
+
                 li_tags.append('</ul>')
 
                 tags.append('\n'.join(li_tags))
@@ -509,11 +500,11 @@ class Fool:
                 pass
             else:
                 (FOOL/self.semester).mkdir(parents=True, exist_ok=True)
-                
+
             (FOOL/self.semester/f'{course_name}.html').write_text(
                 self.template(course_name, ''.join(tags)), encoding='utf8'
             )
-    
+
     def template(self, course_name, string):
         soup = BeautifulSoup(
             '<html><body><div class="main"></div></body></html>',

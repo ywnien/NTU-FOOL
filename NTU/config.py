@@ -19,7 +19,7 @@ def initialize():
         'password': password,
         'file_directory': str(file_directory),
     }
-    
+
     JSON.mkdir(parents=True, exist_ok=True)
     with open(JSON/'config.json', 'w', encoding='utf8') as f:
         json_dump(d, f)
