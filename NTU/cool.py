@@ -229,7 +229,7 @@ class Cool(Session):
             'Context Module Sub Header': self._sub_header,
         }
         modules = {}
-        for block in context_module[checkpoint:]:
+        for i, block in enumerate(context_module[checkpoint:]):
             name = block.find('h2').text # context_module title
             for tag in block(
                 'div', {'class': ['ig-row', 'ig-published', 'student-view']}
@@ -241,9 +241,9 @@ class Cool(Session):
                 )(category, tag)._asdict()
 
                 modules.setdefault(name, []).append(item)
+                self.checkpoints[self.semester][course_name] = i + checkpoint
 
         self.save_modules(modules, course_name, skip_check=True)
-        self.checkpoints[self.semester][course_name] = len(context_module) - 1
         self.save_checkpoints()
         print('Done')
 
@@ -327,6 +327,7 @@ class Cool(Session):
                 item for item in modules[module_title]
                 if item['category'] == 'Attachment'
             ]
+            stop = False
             download_all = False
             for item in attachements:
                 if download_all:
@@ -345,7 +346,9 @@ class Cool(Session):
                     pass
                 else:
                     print('Cancel downloading')
-                    return
+                    break
+            if stop:
+                break
 
         with ThreadPoolExecutor() as executor:
             fs = [
