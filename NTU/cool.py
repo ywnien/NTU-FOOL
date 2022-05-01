@@ -1,7 +1,8 @@
 import json
 import re
+from asyncio import create_task, get_running_loop, run
 from collections import namedtuple
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from bs4 import BeautifulSoup, Doctype
@@ -24,7 +25,7 @@ try:
         student_id = d['student_id']
         password = d['password']
         FOOL = Path(d['file_directory'])
-except:
+except FileNotFoundError:
     initialize()
     with open(JSON/'config.json', 'r', encoding='utf8') as f:
         d = json.load(f)
@@ -100,7 +101,7 @@ class Cool(Session):
         Setting `self.semester` with checking.
 
         If the argument `semester` is wrong, setting this semester by default.
-        
+
         argument:
         - semester: `str`
         """
@@ -125,7 +126,7 @@ class Cool(Session):
             search = input('Search: ')
             return self.search(target, search)
         else:
-            print(*_match, sep=' | ')
+            print(*_match, sep='  ')
             search = input('\nSearch: ')
             return self.search(target, search, _match)
 
@@ -175,7 +176,7 @@ class Cool(Session):
 
         with open(JSON/'courses.json', 'w', encoding='utf8') as f:
             json_dump(_courses, f)
- 
+
         return _courses
 
     def save_modules(self, modules: dict, course_name: str, skip_check=False):
@@ -187,7 +188,7 @@ class Cool(Session):
         try:
             with open(JSON/f'{self.semester}.json', 'r', encoding='utf8') as f:
                 saved = json.load(f)
-        except:
+        except FileNotFoundError:
             with open(JSON/f'{self.semester}.json', 'w', encoding='utf8') as f:
                 saved = {}
                 json_dump(saved, f)
@@ -209,14 +210,14 @@ class Cool(Session):
                 return json.load(f)[course_name]
         except FileNotFoundError:
             with open(JSON/f'{self.semester}.json', 'w', encoding='utf8') as f:
-                return self.get_modules()
+                return self.get_modules(course_name)
 
     def get_modules(self, course_name: str):
         course_name = self.search_course(course_name)
         href = self.courses[self.semester][course_name]
         checkpoint = self.checkpoints[self.semester][course_name]
 
-        print(f'Scraping modules of {course_name}...', end=' ')
+        print(f'Scraping: {course_name}...', end=' ', flush=True)
         soup = BeautifulSoup(
             self.get(f'{self.DOMAIN}{href}/modules').text,
             'lxml'
@@ -234,7 +235,7 @@ class Cool(Session):
             for tag in block(
                 'div', {'class': ['ig-row', 'ig-published', 'student-view']}
             ):
-                category = tag.find('span', class_='type_icon')['title']                
+                category = tag.find('span', class_='type_icon')['title']
 
                 item = switch.get(
                     category, self._others
@@ -301,7 +302,7 @@ class Cool(Session):
         ).find('a', download='true')['href']
 
         return Item(category, title, download_link)
-    
+
     def _sub_header(self, category, tag: BeautifulSoup):
         title = tag.find(
             'span', class_=['title', 'locked_title']
@@ -313,9 +314,13 @@ class Cool(Session):
         title = info['title'].strip()
         url = info['href']
         return Item(category, title, url)
-
-    def download(self, course_name: str):
-        course_name = self.search_course(course_name)
+    
+    def _prompt(self) -> tuple:
+        course_name = input('Course name: ')
+        if course_name == '':
+            return None, []
+        else:
+            course_name = self.search_course(course_name)
 
         modules = self.read_modules(course_name)
         module_titles = list(modules.keys()) # [module_title1, ...]
@@ -334,7 +339,7 @@ class Cool(Session):
                     answer = 'y'
                 else:
                     print(f'Download {module_title}: {item["title"]}?')
-                    print('[Y] Yes [A] Yes to all [N] No [C] Cancel')
+                    print('[Y] Yes\t[A] Yes to all\t[N] No\t[C] Cancel')
                     answer = input().lower()
 
                 if answer == 'y':
@@ -345,17 +350,35 @@ class Cool(Session):
                 elif answer == 'n':
                     pass
                 else:
-                    print('Cancel downloading')
+                    stop = True
                     break
             if stop:
                 break
 
-        with ThreadPoolExecutor() as executor:
-            fs = [
-                executor.submit(self._download, course_name, item)
-                for item in selected_items
-            ]
-            wait(fs, return_when='FIRST_COMPLETED')
+        return course_name, selected_items
+
+    def download(self):
+        async def coroutine():
+            async def async_download():
+                await loop.run_in_executor(
+                    pool, lambda: self._download(course_name, item)
+                )
+        
+            async def async_prompt():
+                return await loop.run_in_executor(pool, self._prompt)
+
+            loop = get_running_loop()
+            with ThreadPoolExecutor() as pool:
+                course_name = 'init'
+                while course_name:
+                    course_name, selected_items = (
+                        await create_task(async_prompt())
+                    )
+                    for item in selected_items:
+                        create_task(async_download())
+                    
+
+        run(coroutine())
 
     def _download(self, course_name, item: Item):
         path = FOOL/self.semester/course_name
@@ -377,15 +400,16 @@ class Cool(Session):
 
 class Fool:
     emoji = {
-        'External Tool': '&#x1F4BB',
-        'Discussion Topic': '&#x1F4AC',
-        'Attachment': '&#x1F4DC',
-        'External Url': '&#x1F517',
-        'Quiz': '&#x1F4CA',
-        'Assignment': '&#x1F4DD',
+        'External Tool': '💻',
+        'Discussion Topic': '💬',
+        'Attachment': '📜',
+        'External Url': '🔗',
+        'Quiz': '📊',
+        'Assignment': '📝',
+        'Page': '📰',
     }
 
-    def __init__(self, cool: Cool, semester=None):
+    def __init__(self, cool: Cool):
         self.c = cool
         self.nav_lang = 1 # 1 for Chinese, 2 for English
 
@@ -400,7 +424,7 @@ class Fool:
             'ch': 'ch',
             'chinese': 'ch',
             'mandarin': 'ch',
-            '英文': 'en', 
+            '英文': 'en',
             'english': 'en',
             'en': 'en'
         }
@@ -420,10 +444,10 @@ class Fool:
         self.c.semester = self.c.check_semester(semester)
 
     def nav_update(self):
-        c = self.c      
+        c = self.c
         soup = BeautifulSoup('<ul class="h_navbar"></ul>', 'html.parser')
 
-        # TODO: add index.html        
+        # TODO: add index.html
         #li_tags = [f'<li><a href="index.html">Home</a></li>']
         li_tags = [f'<li><a href={c.DOMAIN}/courses>NTU COOL</a></li>']
         for course_name in c.courses[self.semester].keys():
@@ -436,11 +460,12 @@ class Fool:
                     course_name
                 ).group(self.nav_lang)
             except AttributeError:
-                string = re.search(
-                    r'(.*?) ([A-z\u4e00-\u9fff]+)', course_name
-                ).group(2)
-            except AttributeError:
-                pass
+                try:
+                    string = re.search(
+                        r'(.*?) ([A-z\u4e00-\u9fff]+)', course_name
+                    ).group(2)
+                except AttributeError:
+                    pass
 
             href = f'{course_name}.html'
             li_tags.append(f'<li><a href="{href}">{string}</a></li>')
@@ -472,28 +497,26 @@ class Fool:
                             f'{self.emoji[category]} {item["title"]}</a></li>'
                         )
                     elif category == 'Context Module Sub Header':
-                        if len(li_tags) == 1: 
+                        if len(li_tags) == 1:
                             li_tags.append(
                                 f'<h3>{item["title"]}</h3>'
                             )
                         else:
-                            li_tags.append('<br><br>')
+                            li_tags.append('</ul><ul>')
                             li_tags.append(
                                 f'<h3>{item["title"]}</h3>'
                             )
                     else:
                         if 'http' in item['url']:
-                            li_tags.append(
-                                f'<li><a href="{item["url"]}">'
-                                f'{self.emoji[category]} {item["title"]}'
-                                '</a></li>'
-                            )
+                            url = item['url']
                         else:
-                            li_tags.append(
-                                f'<li><a href="{c.DOMAIN}{item["url"]}">'
-                                f'{self.emoji[category]} {item["title"]}'
-                                '</a></li>'
-                            )
+                            url = c.DOMAIN + item['url']
+
+                        li_tags.append(
+                            f'<li><a href="{url}">'
+                            f'{self.emoji.get(category, f"<b>{category}</b>")}'
+                            f' {item["title"]}</a></li>'
+                        )
 
                 li_tags.append('</ul>')
 
@@ -520,8 +543,8 @@ class Fool:
         nav = BeautifulSoup(NAVBAR.read_text(encoding='utf8'), 'html.parser')
         # TODO: course html directory may change in future
         active = nav.find('a', href=f'{course_name}.html')
-        active['class'] = 'active' 
+        active['class'] = 'active'
         soup.body.insert(0, nav)
-        soup.div.append(BeautifulSoup(string, 'html.parser'))
+        soup.div.append(BeautifulSoup(string, 'lxml'))
 
         return soup.prettify()
