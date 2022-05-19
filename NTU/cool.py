@@ -1,8 +1,9 @@
 import json
 import re
-from asyncio import create_task, get_running_loop, run
+import asyncio
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 
 from bs4 import BeautifulSoup, Doctype
@@ -10,9 +11,7 @@ from requests import Session
 
 from NTU.config import initialize
 
-json_dump = lambda dictionary, file: json.dump(
-    dictionary, file, indent=4, ensure_ascii=False
-)
+json_dump = partial(json.dump, indent=4, ensure_ascii=False)
 Item = namedtuple('Item', 'category, title, url')
 
 JSON = Path(__file__).parents[1]/'json'
@@ -122,12 +121,13 @@ class Cool(Session):
         if len(_match) == 1:
             return _match[0]
         elif len(_match) == 0:
-            print('No result. Please search again!\n')
-            search = input('Search: ')
+            print('No result')
+            print('Please search again')
+            search = input(': ')
             return self.search(target, search)
         else:
             print(*_match, sep='  ')
-            search = input('\nSearch: ')
+            search = input(': ')
             return self.search(target, search, _match)
 
     def search_course(self, search: str) -> str:
@@ -314,7 +314,7 @@ class Cool(Session):
         title = info['title'].strip()
         url = info['href']
         return Item(category, title, url)
-    
+
     def _prompt(self) -> tuple:
         course_name = input('Course name: ')
         if course_name == '':
@@ -359,26 +359,22 @@ class Cool(Session):
 
     def download(self):
         async def coroutine():
-            async def async_download():
-                await loop.run_in_executor(
-                    pool, lambda: self._download(course_name, item)
-                )
-        
             async def async_prompt():
                 return await loop.run_in_executor(pool, self._prompt)
 
-            loop = get_running_loop()
+            loop = asyncio.get_running_loop()
             with ThreadPoolExecutor() as pool:
                 course_name = 'init'
                 while course_name:
                     course_name, selected_items = (
-                        await create_task(async_prompt())
+                        await asyncio.create_task(async_prompt())
                     )
                     for item in selected_items:
-                        create_task(async_download())
-                    
+                        loop.run_in_executor(
+                            pool, partial(self._download, course_name, item)
+                        )
 
-        run(coroutine())
+        asyncio.run(coroutine())
 
     def _download(self, course_name, item: Item):
         path = FOOL/self.semester/course_name
